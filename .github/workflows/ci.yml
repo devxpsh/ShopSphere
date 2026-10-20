@@ -1,0 +1,109 @@
+name: ShopSphere Full-Stack CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-ci:
+    name: Backend (Typecheck, Prisma, 51 Integration Tests & Build)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: shopsphere_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d shopsphere_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    env:
+      NODE_ENV: test
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres_ci_password@localhost:5432/shopsphere_ci?schema=public
+      JWT_ACCESS_SECRET: ci_test_jwt_access_secret_minimum_32_characters_2026
+      JWT_REFRESH_SECRET: ci_test_jwt_refresh_secret_minimum_32_characters_2026
+      CSRF_SECRET: ci_test_csrf_secret_minimum_32_characters_long_2026
+      CORS_ORIGIN: http://localhost:5173
+      PAYMENT_PROVIDER: MOCK
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        run: npm ci
+
+      - name: Validate Prisma Schema & Generate Client
+        run: |
+          npx prisma validate
+          npx prisma generate
+
+      - name: Apply Prisma Migrations & Seed Demo Data
+        run: |
+          npx prisma migrate deploy
+          npm run prisma:seed
+
+      - name: Run Backend TypeScript Check
+        run: npm run typecheck
+
+      - name: Run Backend Integration & Security Tests (Vitest + Supertest)
+        run: npm test
+
+      - name: Build Production Backend Bundle
+        run: npm run build
+
+  frontend-ci:
+    name: Frontend (Typecheck, 20 Component Tests & Vite Build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Run Frontend TypeScript Check
+        run: npm run typecheck
+
+      - name: Run Frontend Component Tests (Vitest + Testing Library)
+        run: npm test
+
+      - name: Build Production Frontend Bundle
+        run: npm run build
